@@ -2,7 +2,7 @@ import asyncio
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import TypedDict
+from typing import TypedDict, Dict
 
 from fake_useragent import UserAgent
 from httpx import HTTPStatusError
@@ -41,10 +41,12 @@ class AccountsPool:
         db_file="accounts.db",
         login_config: LoginConfig | None = None,
         raise_when_no_account=False,
+        debug=False,
     ):
         self._db_file = db_file
         self._login_config = login_config or LoginConfig()
         self._raise_when_no_account = raise_when_no_account
+        self.debug = debug
 
     async def load_from_file(self, filepath: str, line_format: str):
         line_delim = guess_delim(line_format)
@@ -383,3 +385,156 @@ class AccountsPool:
         items = sorted(items, key=lambda x: x["active"], reverse=True)
         # items = sorted(items, key=lambda x: x["total_req"], reverse=True)
         return items
+
+    # Rettiwt-API integration methods
+    
+    async def set_api_key(self, username: str, api_key: str, validate: bool = True) -> bool:
+        """
+        Set Rettiwt API key for an account.
+        
+        Args:
+            username: Account username
+            api_key: Rettiwt API key to set
+            validate: Whether to validate the API key before saving
+            
+        Returns:
+            True if API key was set successfully, False otherwise
+        """
+        from .rettiwt_bridge import RettiwtBridge
+        
+        account = await self.get_account(username)
+        if not account:
+            logger.error(f"Account {username} not found")
+            return False
+        
+        if validate:
+            try:
+                bridge = RettiwtBridge(debug=self.debug)
+                result = await bridge.validate_api_key(api_key)
+                
+                if not result.get("valid"):
+                    logger.error(f"Invalid API key for {username}: {result.get('error')}")
+                    return False
+                
+                logger.info(f"API key validated for {username} (user: {result.get('username')})")
+                account.api_key_valid = True
+            except Exception as e:
+                logger.error(f"Failed to validate API key for {username}: {e}")
+                if validate:
+                    return False
+                account.api_key_valid = False
+        else:
+            account.api_key_valid = False
+        
+        account.api_key = api_key
+        account.api_key_created = utc.now()
+        await self.save(account)
+        
+        logger.info(f"API key set for {username} (validated: {account.api_key_valid})")
+        return True
+    
+    async def remove_api_key(self, username: str):
+        """
+        Remove Rettiwt API key from an account.
+        
+        Args:
+            username: Account username
+        """
+        account = await self.get_account(username)
+        if not account:
+            logger.error(f"Account {username} not found")
+            return
+        
+        account.api_key = None
+        account.api_key_valid = False
+        account.api_key_created = None
+        await self.save(account)
+        
+        logger.info(f"API key removed for {username}")
+    
+    async def get_account_for_rettiwt(self) -> Account | None:
+        """
+        Get an account suitable for Rettiwt operations (preferring those with valid API keys).
+        
+        Returns:
+            Account with valid API key or fallback account for guest mode
+        """
+        # First try to get account with valid API key
+        qs = """
+        SELECT * FROM accounts 
+        WHERE active = true AND api_key IS NOT NULL AND api_key_valid = true
+        ORDER BY last_used ASC, username
+        LIMIT 1
+        """
+        rs = await fetchone(self._db_file, qs)
+        
+        if rs:
+            return Account.from_rs(rs)
+        
+        # Fall back to any active account for guest mode
+        qs = """
+        SELECT * FROM accounts 
+        WHERE active = true
+        ORDER BY last_used ASC, username
+        LIMIT 1
+        """
+        rs = await fetchone(self._db_file, qs)
+        
+        return Account.from_rs(rs) if rs else None
+    
+    async def validate_all_api_keys(self) -> Dict[str, bool]:
+        """
+        Validate all stored API keys and update their status.
+        
+        Returns:
+            Dictionary mapping username to validation status
+        """
+        from .rettiwt_bridge import RettiwtBridge
+        
+        qs = "SELECT * FROM accounts WHERE api_key IS NOT NULL"
+        rs = await fetchall(self._db_file, qs)
+        accounts = [Account.from_rs(r) for r in rs]
+        
+        if not accounts:
+            logger.info("No accounts with API keys found")
+            return {}
+        
+        bridge = RettiwtBridge(debug=self.debug)
+        results = {}
+        
+        for account in accounts:
+            try:
+                result = await bridge.validate_api_key(account.api_key)
+                is_valid = result.get("valid", False)
+                
+                if is_valid != account.api_key_valid:
+                    account.api_key_valid = is_valid
+                    if is_valid:
+                        account.api_key_created = utc.now()
+                    await self.save(account)
+                    
+                    status = "valid" if is_valid else "invalid"
+                    logger.info(f"API key for {account.username}: {status}")
+                
+                results[account.username] = is_valid
+                
+            except Exception as e:
+                logger.error(f"Failed to validate API key for {account.username}: {e}")
+                if account.api_key_valid:
+                    account.api_key_valid = False
+                    await self.save(account)
+                results[account.username] = False
+        
+        valid_count = sum(results.values())
+        logger.info(f"API key validation complete: {valid_count}/{len(results)} valid")
+        
+        return results
+
+    async def save_account(self, account: Account):
+        """
+        Save account (alias for save method for backward compatibility).
+        
+        Args:
+            account: Account to save
+        """
+        await self.save(account)

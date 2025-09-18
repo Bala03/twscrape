@@ -84,11 +84,19 @@ async def migrate(db: aiosqlite.Connection):
     async def v4():
         await db.execute("ALTER TABLE accounts ADD COLUMN mfa_code TEXT DEFAULT NULL")
 
+    async def v5():
+        # Add Rettiwt-API integration fields
+        await db.execute("ALTER TABLE accounts ADD COLUMN api_key TEXT DEFAULT NULL")
+        await db.execute("ALTER TABLE accounts ADD COLUMN api_key_valid BOOLEAN DEFAULT FALSE NOT NULL")
+        await db.execute("ALTER TABLE accounts ADD COLUMN api_key_created TEXT DEFAULT NULL")
+        await db.execute("ALTER TABLE accounts ADD COLUMN guest_key TEXT DEFAULT NULL")
+
     migrations = {
         1: v1,
         2: v2,
         3: v3,
         4: v4,
+        5: v5,
     }
 
     # logger.debug(f"Current migration v{uv} (latest v{len(migrations)})")
