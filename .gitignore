@@ -8,3 +8,35 @@ accounts.db*
 data/
 data_media/
 dist/
+
+# Node.js dependencies (for Rettiwt-API bridge)
+node_modules/
+package-lock.json
+twscrape/rettiwt_bridge_scripts/node_modules/
+twscrape/rettiwt_bridge_scripts/package-lock.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Test files
+test_rettiwt_integration.py
+test_rettiwt_node.js
