@@ -25,8 +25,12 @@ class CustomHelpFormatter(argparse.HelpFormatter):
 def get_fn_arg(args):
     names = ["query", "tweet_id", "user_id", "username", "list_id", "trend_id"]
     for name in names:
-        if name in args:
+        if hasattr(args, name) and getattr(args, name) is not None:
             return name, getattr(args, name)
+
+    # Some commands don't need positional arguments
+    if hasattr(args, "command") and args.command in ["user_bookmarks"]:
+        return "limit", getattr(args, "limit", -1)
 
     logger.error(f"Missing argument: {names}")
     exit(1)
@@ -50,8 +54,19 @@ async def main(args):
         return
 
     login_config = LoginConfig(getattr(args, "email_first", False), getattr(args, "manual", False))
-    pool = AccountsPool(args.db, login_config=login_config)
-    api = API(pool, debug=args.debug)
+    pool = AccountsPool(args.db, login_config=login_config, debug=args.debug)
+    
+    # Use enhanced API if Rettiwt features are needed
+    enable_rettiwt = getattr(args, "enable_rettiwt", True)
+    if hasattr(args, "command") and args.command in [
+        "set_api_key", "remove_api_key", "validate_api_keys", "enhanced_capabilities",
+        "tweet_bookmark", "tweet_unbookmark", "user_bookmarks", "tweet_schedule",
+        "user_follow", "user_unfollow"
+    ]:
+        from .enhanced_api import EnhancedAPI
+        api = EnhancedAPI(pool, debug=args.debug, enable_rettiwt=enable_rettiwt)
+    else:
+        api = API(pool, debug=args.debug)
 
     if args.command == "accounts":
         print_table([dict(x) for x in await pool.accounts_info()])
@@ -100,6 +115,68 @@ async def main(args):
 
     if args.command == "delete_inactive":
         await pool.delete_inactive()
+        return
+
+    # Rettiwt-API integration commands
+    if args.command == "set_api_key":
+        success = await pool.set_api_key(args.username, args.api_key, validate=not args.no_validate)
+        if success:
+            print(f"API key set for {args.username}")
+        else:
+            print(f"Failed to set API key for {args.username}")
+        return
+
+    if args.command == "remove_api_key":
+        await pool.remove_api_key(args.username)
+        print(f"API key removed for {args.username}")
+        return
+
+    if args.command == "validate_api_keys":
+        results = await pool.validate_all_api_keys()
+        if results:
+            print_table([
+                {"username": username, "valid": "✓" if valid else "✗"}
+                for username, valid in results.items()
+            ])
+        else:
+            print("No API keys found")
+        return
+
+    if args.command == "enhanced_capabilities":
+        capabilities = await api.get_enhanced_capabilities()
+        print(json.dumps(capabilities, indent=2, default=str))
+        return
+
+    # Enhanced tweet operations
+    if args.command == "tweet_bookmark":
+        result = await api.tweet_bookmark(args.tweet_id)
+        print(json.dumps(result, default=str))
+        return
+
+    if args.command == "tweet_unbookmark":
+        result = await api.tweet_unbookmark(args.tweet_id)
+        print(json.dumps(result, default=str))
+        return
+
+    if args.command == "tweet_schedule":
+        result = await api.tweet_schedule(args.text, args.schedule_time)
+        print(json.dumps(result, default=str))
+        return
+
+    # Enhanced user operations
+    if args.command == "user_follow":
+        result = await api.user_follow(args.user_id)
+        print(json.dumps(result, default=str))
+        return
+
+    if args.command == "user_unfollow":
+        result = await api.user_unfollow(args.user_id)
+        print(json.dumps(result, default=str))
+        return
+
+    if args.command == "user_bookmarks":
+        async for doc in api.user_bookmarks(limit=args.limit):
+            print(to_str(doc))
         return
 
     fn = args.command + "_raw" if args.raw else args.command
@@ -179,6 +256,34 @@ def run():
 
     subparsers.add_parser("reset_locks", help="Reset all locks")
     subparsers.add_parser("delete_inactive", help="Delete inactive accounts")
+
+    # Rettiwt-API integration commands
+    set_api_key = subparsers.add_parser("set_api_key", help="Set Rettiwt API key for account")
+    set_api_key.add_argument("username", help="Username")
+    set_api_key.add_argument("api_key", help="Rettiwt API key")
+    set_api_key.add_argument("--no-validate", action="store_true", help="Skip API key validation")
+
+    remove_api_key = subparsers.add_parser("remove_api_key", help="Remove Rettiwt API key from account")
+    remove_api_key.add_argument("username", help="Username")
+
+    subparsers.add_parser("validate_api_keys", help="Validate all stored API keys")
+    subparsers.add_parser("enhanced_capabilities", help="Show enhanced capabilities status")
+
+    # Enhanced tweet operations
+    c_one("tweet_bookmark", "Bookmark a tweet", "tweet_id", "Tweet ID", int)
+    c_one("tweet_unbookmark", "Remove bookmark from tweet", "tweet_id", "Tweet ID", int)
+    
+    tweet_schedule = subparsers.add_parser("tweet_schedule", help="Schedule a tweet")
+    tweet_schedule.add_argument("text", help="Tweet text")
+    tweet_schedule.add_argument("schedule_time", help="Schedule time (ISO format)")
+
+    # Enhanced user operations  
+    c_one("user_follow", "Follow a user", "user_id", "User ID", int)
+    c_one("user_unfollow", "Unfollow a user", "user_id", "User ID", int)
+    
+    user_bookmarks = subparsers.add_parser("user_bookmarks", help="Get user bookmarks")
+    user_bookmarks.add_argument("--limit", type=int, default=-1, help="Max bookmarks to retrieve")
+    user_bookmarks.add_argument("--raw", action="store_true", help="Print raw response")
 
     c_lim("search", "Search for tweets", "query", "Search query")
     c_one("tweet_details", "Get tweet details", "tweet_id", "Tweet ID", int)

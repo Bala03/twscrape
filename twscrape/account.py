@@ -29,6 +29,11 @@ class Account(JSONTrait):
     error_msg: str | None = None
     last_used: datetime | None = None
     _tx: str | None = None
+    # Rettiwt-API integration fields
+    api_key: str | None = None  # Rettiwt API key for enhanced features
+    api_key_valid: bool = False  # Whether the API key has been validated
+    api_key_created: datetime | None = None  # When the API key was created/last validated
+    guest_key: str | None = None  # Rettiwt guest key for limited features
 
     @staticmethod
     def from_rs(rs: sqlite3.Row):
@@ -39,6 +44,9 @@ class Account(JSONTrait):
         doc["cookies"] = json.loads(doc["cookies"])
         doc["active"] = bool(doc["active"])
         doc["last_used"] = utc.from_iso(doc["last_used"]) if doc["last_used"] else None
+        # Handle new Rettiwt fields with backward compatibility
+        doc["api_key_valid"] = bool(doc.get("api_key_valid", False))
+        doc["api_key_created"] = utc.from_iso(doc["api_key_created"]) if doc.get("api_key_created") else None
         return Account(**doc)
 
     def to_rs(self):
@@ -48,6 +56,8 @@ class Account(JSONTrait):
         rs["headers"] = json.dumps(rs["headers"])
         rs["cookies"] = json.dumps(rs["cookies"])
         rs["last_used"] = rs["last_used"].isoformat() if rs["last_used"] else None
+        # Handle new Rettiwt fields
+        rs["api_key_created"] = rs["api_key_created"].isoformat() if rs["api_key_created"] else None
         return rs
 
     def make_client(self, proxy: str | None = None) -> AsyncClient:
